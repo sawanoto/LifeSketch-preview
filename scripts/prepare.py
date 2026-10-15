@@ -3,6 +3,7 @@ import html
 import io
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import tarfile
 import urllib.request
@@ -11,7 +12,22 @@ from datetime import datetime, timezone
 SOURCE = 'sawanoto/LifeSketch'
 PUBLIC = 'https://sawanoto.github.io/LifeSketch-preview/'
 OUT = Path('site')
-VERSION = 1
+VERSION = 2
+
+
+def bust_asset_cache(document, sha):
+    """Keep relative paths, but force browsers to fetch each PR revision's assets."""
+    pattern = r'''(<(?:script|link)\b[^>]*?\b(?:src|href)\s*=\s*)(["'])([^"']*)(\2)'''
+    def replace(match):
+        url = match.group(3)
+        if not url or url.startswith(('#', '//')) or re.match(r'[a-zA-Z][a-zA-Z0-9+.-]*:', url):
+            return match.group(0)
+        path, separator, fragment = url.partition('#')
+        path += ('&amp;' if '?' in path else '?') + 'preview_sha=' + sha
+        if separator:
+            path += '#' + fragment
+        return match.group(1) + match.group(2) + path + match.group(4)
+    return re.sub(pattern, replace, document, flags=re.IGNORECASE)
 
 
 def api(path):
@@ -78,6 +94,9 @@ def main():
                 with archive.extractfile(member) as source:
                     destination.write_bytes(source.read())
         (target / 'preview-info.json').write_text(json.dumps(pr, ensure_ascii=False), encoding='utf-8')
+        for document in target.rglob('*.html'):
+            text = document.read_text(encoding='utf-8')
+            document.write_text(bust_asset_cache(text, pr['sha']), encoding='utf-8')
         title = html.escape(pr['title'])
         short = pr['sha'][:7]
         links = []
